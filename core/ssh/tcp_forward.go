@@ -18,6 +18,7 @@
 package sshserver
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -33,6 +34,15 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+const tcpBufferSize = 32 * 1024
+
+var tcpBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, tcpBufferSize)
+		return &b
+	},
+}
 
 // HandleDirectTCPIP forwards a direct-tcpip SSH channel to a remote TCP target.
 func (h *Handler) HandleDirectTCPIP(newChannel ssh.NewChannel, username, userIP string) {
@@ -60,11 +70,12 @@ func (h *Handler) HandleDirectTCPIP(newChannel ssh.NewChannel, username, userIP 
 
 	logging.UserAccess(username, req.HostToConnect, userIP)
 
-	destConn, err := net.Dial("tcp", target)
+	destConn, err := net.DialTimeout("tcp", target, 15*time.Second)
 	if err != nil {
 		newChannel.Reject(ssh.ConnectionFailed, "could not connect to target")
 		return
 	}
+	defer destConn.Close()
 
 	if tcpConn, ok := destConn.(*net.TCPConn); ok {
 		tcpConn.SetNoDelay(true)
@@ -74,38 +85,48 @@ func (h *Handler) HandleDirectTCPIP(newChannel ssh.NewChannel, username, userIP 
 
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
-		destConn.Close()
 		return
 	}
+	defer channel.Close()
 	go ssh.DiscardRequests(requests)
-
-	var bytesSent atomic.Int64
-	var bytesReceived atomic.Int64
-
-	var wg sync.WaitGroup
-	wg.Add(3)
 
 	user, _ := config.GetUser(username)
 	maxTotalMB := user.MaxTotalMB
 	userLimiter := h.Traffic.GetRateLimiter(username)
 
-	var downloadReader io.Reader = destConn
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var downloadWriter io.Writer = channel
-	var uploadReader io.Reader = channel
 	var uploadWriter io.Writer = destConn
 
 	if userLimiter != nil {
-		downloadWriter = &traffic.ThrottledWriter{W: channel, Limiter: userLimiter}
-		uploadWriter = &traffic.ThrottledWriter{W: destConn, Limiter: userLimiter}
+		downloadWriter = &traffic.ThrottledWriter{W: channel, Limiter: userLimiter, Ctx: ctx}
+		uploadWriter = &traffic.ThrottledWriter{W: destConn, Limiter: userLimiter, Ctx: ctx}
 	}
 
-	const bufferSize = 64 * 1024
-	limitExceeded := make(chan bool, 1)
+	var bytesSent atomic.Int64
+	var bytesReceived atomic.Int64
 	var lastSent int64
 	var lastReceived int64
 
+	limitExceeded := make(chan struct{}, 1)
+	done := make(chan struct{})
+
+	var closeOnce sync.Once
+	closeBoth := func() {
+		closeOnce.Do(func() {
+			cancel()
+			_ = channel.Close()
+			_ = destConn.Close()
+		})
+	}
+
+	// Traffic monitoring & rate-limit check goroutine
+	var monitorWg sync.WaitGroup
+	monitorWg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer monitorWg.Done()
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		const saveEveryNTicks = 5
@@ -121,10 +142,12 @@ func (h *Handler) HandleDirectTCPIP(newChannel ssh.NewChannel, username, userIP 
 
 				if sentDelta > 0 || receivedDelta > 0 {
 					if h.Traffic.UpdateRealTime(username, userIP, sentDelta, receivedDelta, maxTotalMB) {
-						limitExceeded <- true
+						select {
+						case limitExceeded <- struct{}{}:
+						default:
+						}
 						log.Printf("🚫 User %s exceeded traffic limit, closing connection", username)
-						channel.Close()
-						destConn.Close()
+						closeBoth()
 						return
 					}
 					tickCount++
@@ -135,59 +158,95 @@ func (h *Handler) HandleDirectTCPIP(newChannel ssh.NewChannel, username, userIP 
 					lastSent = currentSent
 					lastReceived = currentReceived
 				}
+			case <-done:
+				return
 			case <-limitExceeded:
 				return
 			}
 		}
 	}()
 
+	var transferWg sync.WaitGroup
+	transferWg.Add(2)
+
+	// Goroutine: Target -> Client (Download)
 	go func() {
-		defer wg.Done()
+		defer transferWg.Done()
 		defer channel.CloseWrite()
-		buf := make([]byte, bufferSize)
+
+		bufPtr := tcpBufPool.Get().(*[]byte)
+		defer tcpBufPool.Put(bufPtr)
+		buf := *bufPtr
+
 		for {
 			select {
 			case <-limitExceeded:
 				return
+			case <-ctx.Done():
+				return
 			default:
 			}
-			n, err := downloadReader.Read(buf)
+
+			n, err := destConn.Read(buf)
 			if n > 0 {
 				bytesReceived.Add(int64(n))
 				if _, writeErr := downloadWriter.Write(buf[:n]); writeErr != nil {
+					closeBoth()
 					break
 				}
 			}
 			if err != nil {
+				if err != io.EOF {
+					closeBoth()
+				}
 				break
 			}
 		}
 	}()
 
+	// Goroutine: Client -> Target (Upload)
 	go func() {
-		defer wg.Done()
-		defer destConn.Close()
-		buf := make([]byte, bufferSize)
+		defer transferWg.Done()
+		defer func() {
+			if tc, ok := destConn.(*net.TCPConn); ok {
+				_ = tc.CloseWrite()
+			}
+		}()
+
+		bufPtr := tcpBufPool.Get().(*[]byte)
+		defer tcpBufPool.Put(bufPtr)
+		buf := *bufPtr
+
 		for {
 			select {
 			case <-limitExceeded:
 				return
+			case <-ctx.Done():
+				return
 			default:
 			}
-			n, err := uploadReader.Read(buf)
+
+			n, err := channel.Read(buf)
 			if n > 0 {
 				bytesSent.Add(int64(n))
 				if _, writeErr := uploadWriter.Write(buf[:n]); writeErr != nil {
+					closeBoth()
 					break
 				}
 			}
 			if err != nil {
+				if err != io.EOF {
+					closeBoth()
+				}
 				break
 			}
 		}
 	}()
 
-	wg.Wait()
+	transferWg.Wait()
+	close(done)
+	closeBoth()
+	monitorWg.Wait()
 
 	sent := bytesSent.Load()
 	received := bytesReceived.Load()

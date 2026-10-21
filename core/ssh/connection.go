@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -39,6 +40,14 @@ func (h *Handler) HandleConnection(conn net.Conn, sshConfig *ssh.ServerConfig) {
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, sshConfig)
 	if err != nil {
+		if remoteIP, _, splitErr := net.SplitHostPort(conn.RemoteAddr().String()); splitErr == nil {
+			sessionMetadata.Range(func(k, v any) bool {
+				if keyStr, ok := k.(string); ok && strings.HasSuffix(keyStr, "|"+remoteIP) {
+					sessionMetadata.Delete(k)
+				}
+				return true
+			})
+		}
 		log.Printf("Failed to handshake: %s", err)
 		return
 	}

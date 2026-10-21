@@ -35,6 +35,20 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var udpPayloadPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, config.UDPMaxDatagramSize)
+		return &b
+	},
+}
+
+var udpFramePool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 2+config.UDPMaxDatagramSize)
+		return &b
+	},
+}
+
 // HandleDirectUDPIP forwards a direct-udpip SSH channel using length-prefixed datagram framing.
 func (h *Handler) HandleDirectUDPIP(newChannel ssh.NewChannel, username, userIP string) {
 	type directUDPIPReq struct {
@@ -148,7 +162,9 @@ func (h *Handler) HandleDirectUDPIP(newChannel ssh.NewChannel, username, userIP 
 		defer channel.CloseWrite()
 
 		var hdr [2]byte
-		payload := make([]byte, config.UDPMaxDatagramSize)
+		payloadPtr := udpPayloadPool.Get().(*[]byte)
+		defer udpPayloadPool.Put(payloadPtr)
+		payload := *payloadPtr
 
 		for {
 			select {
@@ -187,7 +203,9 @@ func (h *Handler) HandleDirectUDPIP(newChannel ssh.NewChannel, username, userIP 
 		defer wg.Done()
 		defer channel.Close()
 
-		frame := make([]byte, 2+config.UDPMaxDatagramSize)
+		framePtr := udpFramePool.Get().(*[]byte)
+		defer udpFramePool.Put(framePtr)
+		frame := *framePtr
 		for {
 			select {
 			case <-limitExceeded:
