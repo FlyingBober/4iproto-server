@@ -370,11 +370,9 @@ func (sm *Manager) CleanupExpiredSessions() {
 			if err := json.Unmarshal(v, &session); err != nil {
 				return nil
 			}
-			if !session.Revoked {
-				ttl := userSessionTTL(session.Username)
-				if now-session.LastSeen > int64(ttl) {
-					expiredSessions = append(expiredSessions, session.SessionID)
-				}
+			ttl := userSessionTTL(session.Username)
+			if session.Revoked || now-session.LastSeen > int64(ttl) {
+				expiredSessions = append(expiredSessions, session.SessionID)
 			}
 			return nil
 		})
