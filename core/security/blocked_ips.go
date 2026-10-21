@@ -23,10 +23,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"Abdal_4iProto_Server/core/config"
 	"Abdal_4iProto_Server/core/paths"
 )
+
+type failedAttemptInfo struct {
+	count    int
+	lastSeen time.Time
+}
 
 // Guard manages the global IP block list and failed auth counters.
 type Guard struct {
@@ -34,7 +40,7 @@ type Guard struct {
 	blockedSet map[string]struct{}
 	mu         sync.RWMutex
 
-	failedAttempts map[string]int
+	failedAttempts map[string]failedAttemptInfo
 	failedMu       sync.Mutex
 }
 
@@ -42,7 +48,7 @@ type Guard struct {
 func NewGuard() *Guard {
 	return &Guard{
 		blockedSet:     make(map[string]struct{}),
-		failedAttempts: make(map[string]int),
+		failedAttempts: make(map[string]failedAttemptInfo),
 	}
 }
 
@@ -127,13 +133,28 @@ func (g *Guard) AddBlockedIP(ip string) bool {
 // Returns the new count and whether the IP should be blocked.
 func (g *Guard) RecordFailedLogin(ip string) (attempts int, shouldBlock bool) {
 	maxAttempts := config.MaxAuthAttempts()
+	now := time.Now()
 
 	g.failedMu.Lock()
-	g.failedAttempts[ip]++
-	attempts = g.failedAttempts[ip]
+	info := g.failedAttempts[ip]
+	if !info.lastSeen.IsZero() && now.Sub(info.lastSeen) > 1*time.Hour {
+		info.count = 0
+	}
+	info.count++
+	info.lastSeen = now
+	attempts = info.count
 	shouldBlock = attempts >= maxAttempts
 	if shouldBlock {
 		delete(g.failedAttempts, ip)
+	} else {
+		g.failedAttempts[ip] = info
+		if len(g.failedAttempts) > 500 {
+			for k, v := range g.failedAttempts {
+				if now.Sub(v.lastSeen) > 1*time.Hour {
+					delete(g.failedAttempts, k)
+				}
+			}
+		}
 	}
 	g.failedMu.Unlock()
 	return attempts, shouldBlock

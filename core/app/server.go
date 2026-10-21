@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"runtime/debug"
 	"time"
 
 	"Abdal_4iProto_Server/core/config"
@@ -33,6 +35,10 @@ import (
 
 // Run starts the Abdal 4iProto Server (blocking).
 func Run() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(250 * 1024 * 1024) // 250 MiB soft memory limit
+	}
+
 	trafficStore := traffic.NewStore()
 	guard := security.NewGuard()
 
