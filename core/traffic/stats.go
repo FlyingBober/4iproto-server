@@ -278,11 +278,18 @@ func (s *Store) StartAutoSave() {
 			log.Printf("❌ Failed to create users_traffic directory: %v", err)
 		}
 
+		lastSavedBytes := make(map[string]int64)
+
 		for {
 			time.Sleep(config.TrafficAutoSaveInterval)
 			s.trafficMap.Range(func(key, value any) bool {
 				username := key.(string)
 				stats := value.(*config.TrafficStats)
+
+				if lastSaved, ok := lastSavedBytes[username]; ok && stats.TotalBytes == lastSaved {
+					return true
+				}
+
 				filename := fmt.Sprintf("traffic_%s.json", username)
 				fullPath := filepath.Join(trafficDir, filename)
 				data, err := json.MarshalIndent(stats, "", "  ")
@@ -294,6 +301,7 @@ func (s *Store) StartAutoSave() {
 					log.Printf("❌ Failed to write traffic file for %s: %v", username, err)
 					return true
 				}
+				lastSavedBytes[username] = stats.TotalBytes
 				log.Printf("✅ [AUTO] Saved traffic → %s | ↑%dB ↓%dB 📦 %dB",
 					filename, stats.TotalBytesSent, stats.TotalBytesReceived, stats.TotalBytes)
 				return true

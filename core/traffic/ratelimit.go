@@ -54,6 +54,7 @@ func (s *Store) GetRateLimiter(username string) *rate.Limiter {
 type ThrottledReader struct {
 	R       io.Reader
 	Limiter *rate.Limiter
+	Ctx     context.Context
 }
 
 func (tr *ThrottledReader) Read(p []byte) (n int, err error) {
@@ -64,22 +65,65 @@ func (tr *ThrottledReader) Read(p []byte) (n int, err error) {
 	if n <= 0 {
 		return n, err
 	}
-	err = tr.Limiter.WaitN(context.Background(), n)
-	return n, err
+	ctx := tr.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	burst := tr.Limiter.Burst()
+	if burst <= 0 || n <= burst {
+		err = tr.Limiter.WaitN(ctx, n)
+		return n, err
+	}
+	// If n > burst, wait in chunks to avoid rate: Wait(n) exceeds limiter's budget
+	rem := n
+	for rem > 0 {
+		chunk := rem
+		if chunk > burst {
+			chunk = burst
+		}
+		if err = tr.Limiter.WaitN(ctx, chunk); err != nil {
+			return n, err
+		}
+		rem -= chunk
+	}
+	return n, nil
 }
 
 // ThrottledWriter wraps an io.Writer with rate limiting.
 type ThrottledWriter struct {
 	W       io.Writer
 	Limiter *rate.Limiter
+	Ctx     context.Context
 }
 
 func (tw *ThrottledWriter) Write(p []byte) (n int, err error) {
 	if tw.Limiter == nil {
 		return tw.W.Write(p)
 	}
-	if err := tw.Limiter.WaitN(context.Background(), len(p)); err != nil {
-		return 0, err
+	ctx := tw.Ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return tw.W.Write(p)
+	burst := tw.Limiter.Burst()
+	if burst <= 0 {
+		return tw.W.Write(p)
+	}
+
+	totalWritten := 0
+	for len(p) > 0 {
+		chunk := len(p)
+		if chunk > burst {
+			chunk = burst
+		}
+		if err := tw.Limiter.WaitN(ctx, chunk); err != nil {
+			return totalWritten, err
+		}
+		nw, err := tw.W.Write(p[:chunk])
+		totalWritten += nw
+		if err != nil {
+			return totalWritten, err
+		}
+		p = p[nw:]
+	}
+	return totalWritten, nil
 }
