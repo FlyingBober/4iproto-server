@@ -32,36 +32,38 @@ type TrafficStats struct {
 
 // User represents a single authenticated account with policy fields.
 type User struct {
-	Username          string   `json:"username"`
-	Password          string   `json:"password"`
-	Role              string   `json:"role"`
-	BlockedDomains    []string `json:"blocked_domains"`
-	BlockedIPs        []string `json:"blocked_ips"`
-	Log               string   `json:"log"`
-	MaxSessions       int      `json:"max_sessions"`
-	SessionTTLSeconds int      `json:"session_ttl_seconds"`
-	MaxSpeedKBPS      int      `json:"max_speed_kbps"`
-	MaxTotalMB        int      `json:"max_total_mb"`
+	Username           string   `json:"username"`
+	Password           string   `json:"password"`
+	Role               string   `json:"role"`
+	BlockedDomains     []string `json:"blocked_domains"`
+	BlockedIPs         []string `json:"blocked_ips"`
+	Log                string   `json:"log"`
+	MaxSessions        int      `json:"max_sessions"`
+	SessionTTLSeconds  int      `json:"session_ttl_seconds"`
+	MaxSpeedKBPS       int      `json:"max_speed_kbps"`
+	MaxTotalMB         int      `json:"max_total_mb"`
+	EvictOnMaxSessions *bool    `json:"evict_on_max_sessions,omitempty"`
 }
 
 // ServerConfig is the top-level server configuration loaded from JSON.
 type ServerConfig struct {
-	Ports           []int  `json:"ports"`
-	Shell           string `json:"shell"`
-	MaxAuthAttempts int    `json:"max_auth_attempts"`
-	ServerVersion   string `json:"server_version"`
-	PrivateKeyFile  string `json:"private_key_file"`
-	PublicKeyFile   string `json:"public_key_file"`
-	DNSTTEnabled    bool   `json:"dnstt_enabled"`
-	DNSTTListen     string `json:"dnstt_listen"`
-	DNSTTResolver   string `json:"dnstt_resolver"`
-	DNSTTNameserver string `json:"dnstt_nameserver"`
-	DNSTTPublicKey  string `json:"dnstt_public_key"`
-	DNSTTPSK        string `json:"dnstt_psk"`
-	DNSTTMaxSessionsPerIP int `json:"dnstt_max_sessions_per_ip"`
-	DNSTTIdleTimeoutSec   int `json:"dnstt_idle_timeout_seconds"`
-	UDPIdleTimeoutSec     int `json:"udp_idle_timeout_seconds"`
-	UDPSocketBufferKB     int `json:"udp_socket_buffer_kb"`
+	Ports                 []int  `json:"ports"`
+	Shell                 string `json:"shell"`
+	MaxAuthAttempts       int    `json:"max_auth_attempts"`
+	ServerVersion         string `json:"server_version"`
+	PrivateKeyFile        string `json:"private_key_file"`
+	PublicKeyFile         string `json:"public_key_file"`
+	DNSTTEnabled          bool   `json:"dnstt_enabled"`
+	DNSTTListen           string `json:"dnstt_listen"`
+	DNSTTResolver         string `json:"dnstt_resolver"`
+	DNSTTNameserver       string `json:"dnstt_nameserver"`
+	DNSTTPublicKey        string `json:"dnstt_public_key"`
+	DNSTTPSK              string `json:"dnstt_psk"`
+	DNSTTMaxSessionsPerIP int    `json:"dnstt_max_sessions_per_ip"`
+	DNSTTIdleTimeoutSec   int    `json:"dnstt_idle_timeout_seconds"`
+	UDPIdleTimeoutSec     int    `json:"udp_idle_timeout_seconds"`
+	UDPSocketBufferKB     int    `json:"udp_socket_buffer_kb"`
+	EvictOnMaxSessions    bool   `json:"evict_on_max_sessions"`
 }
 
 // BlockedIPs is the on-disk representation of the global IP block list.

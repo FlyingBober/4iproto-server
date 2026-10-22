@@ -14,5 +14,6 @@
   "dnstt_max_sessions_per_ip": 8,
   "dnstt_idle_timeout_seconds": 60,
   "udp_idle_timeout_seconds": 90,
-  "udp_socket_buffer_kb": 4096
+  "udp_socket_buffer_kb": 4096,
+  "evict_on_max_sessions": true
 }

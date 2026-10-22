@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -129,6 +130,13 @@ func userSessionTTL(username string) int {
 	return config.DefaultSessionTTLSeconds
 }
 
+func userEvictOnMaxSessions(username string) bool {
+	if user, ok := config.GetUser(username); ok && user.EvictOnMaxSessions != nil {
+		return *user.EvictOnMaxSessions
+	}
+	return config.Server().EvictOnMaxSessions
+}
+
 // CreateSession creates a new session and rejects if max sessions limit exceeded.
 func (sm *Manager) CreateSession(username, ip, clientVersion string) (string, error) {
 	sm.mu.Lock()
@@ -144,8 +152,28 @@ func (sm *Manager) CreateSession(username, ip, clientVersion string) (string, er
 	}
 
 	if len(activeSessions) >= maxSessions {
-		log.Printf("🚫 Max sessions reached for %s (%d/%d), rejecting new connection from %s", username, len(activeSessions), maxSessions, ip)
-		return "", fmt.Errorf("maximum concurrent sessions limit reached (%d/%d). please wait for an existing session to close", len(activeSessions), maxSessions)
+		if userEvictOnMaxSessions(username) {
+			sort.Slice(activeSessions, func(i, j int) bool {
+				return activeSessions[i].CreatedAt < activeSessions[j].CreatedAt
+			})
+			for len(activeSessions) >= maxSessions && len(activeSessions) > 0 {
+				oldest := activeSessions[0]
+				log.Printf("⚠️ Max sessions reached for %s (%d/%d), evicting oldest session %s (IP: %s)",
+					username, len(activeSessions), maxSessions, oldest.SessionID[:16]+"...", oldest.IP)
+
+				if conn, exists := sm.activeConnections[oldest.SessionID]; exists {
+					conn.Close()
+					delete(sm.activeConnections, oldest.SessionID)
+				}
+				if err := sm.revokeSessionLocked(oldest.SessionID); err != nil {
+					log.Printf("⚠️ Failed to revoke evicted session %s: %v", oldest.SessionID[:16]+"...", err)
+				}
+				activeSessions = activeSessions[1:]
+			}
+		} else {
+			log.Printf("🚫 Max sessions reached for %s (%d/%d), rejecting new connection from %s", username, len(activeSessions), maxSessions, ip)
+			return "", fmt.Errorf("maximum concurrent sessions limit reached (%d/%d). please wait for an existing session to close", len(activeSessions), maxSessions)
+		}
 	}
 
 	session := Info{

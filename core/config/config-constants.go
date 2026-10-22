@@ -45,6 +45,7 @@ const (
 const (
 	DefaultMaxSessionsPerUser = 2
 	DefaultSessionTTLSeconds  = 300
+	DefaultEvictOnMaxSessions = false
 	BucketSessions            = "sessions"
 	BucketUserSessions        = "user_sessions"
 	SessionCleanupInterval    = 30 * time.Second
