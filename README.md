@@ -6,7 +6,7 @@
 
 A high-performance SSH-based tunneling server designed for secure internet access, built with advanced security features and traffic monitoring capabilities.
 
-**📖 [فارسی](README.fa.md) | [English](README.md)**
+**📖 [English](README.md) | [Русский](README.ru.md) | [فارسی](README.fa.md)**
 
 ## 📚 Documentation
 
