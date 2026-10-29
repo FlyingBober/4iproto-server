@@ -22,7 +22,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"sync"
+	"syscall"
 	"time"
 
 	"Abdal_4iProto_Server/core/config"
@@ -64,22 +67,26 @@ func Run() {
 		go dnstt.StartGateway(serverCfg, guard)
 	}
 
+	var listeners []net.Listener
+	var listenersMu sync.Mutex
+
 	for _, port := range serverCfg.Ports {
-		go func(p int) {
-			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", p))
-			if err != nil {
-				log.Printf("❌ Failed to listen on port %d: %v", p, err)
-				return
-			}
-			defer listener.Close()
+		listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		if err != nil {
+			log.Printf("❌ Failed to listen on port %d: %v", port, err)
+			continue
+		}
+		listenersMu.Lock()
+		listeners = append(listeners, listener)
+		listenersMu.Unlock()
 
-			log.Printf("🚀 Abdal 4iProto Server listening on port %d", p)
+		log.Printf("🚀 Abdal 4iProto Server listening on port %d", port)
 
+		go func(l net.Listener, p int) {
 			for {
-				conn, err := listener.Accept()
+				conn, err := l.Accept()
 				if err != nil {
-					log.Printf("❌ Failed to accept connection on port %d: %v", p, err)
-					continue
+					return
 				}
 				if tcpConn, ok := conn.(*net.TCPConn); ok {
 					tcpConn.SetNoDelay(true)
@@ -88,11 +95,30 @@ func Run() {
 				}
 				go handler.HandleConnection(conn, sshConfig)
 			}
-		}(port)
+		}(listener, port)
 	}
 
 	trafficStore.StartAutoSave()
 	trafficStore.StartDebugTicker()
 
-	select {}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigChan
+	log.Printf("🛑 Received shutdown signal (%v), initiating graceful shutdown...", sig)
+
+	listenersMu.Lock()
+	for _, l := range listeners {
+		_ = l.Close()
+	}
+	listenersMu.Unlock()
+
+	log.Printf("💾 Saving all pending user traffic stats...")
+	trafficStore.SaveAllTraffic()
+
+	log.Printf("🔒 Closing active sessions and database...")
+	if err := sm.Close(); err != nil {
+		log.Printf("⚠️ Error closing session database: %v", err)
+	}
+
+	log.Printf("👋 Abdal 4iProto Server shutdown cleanly.")
 }
