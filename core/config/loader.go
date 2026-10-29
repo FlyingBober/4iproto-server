@@ -30,6 +30,40 @@ import (
 // RateLimiterInit is called for each user with a speed cap after users are loaded.
 type RateLimiterInit func(username string, maxSpeedKBPS int)
 
+// ParseUsersData parses users from either modern JSON array format or legacy map format,
+// validating and applying safe defaults.
+func ParseUsersData(data []byte) (map[string]User, error) {
+	var userList []User
+	if err := json.Unmarshal(data, &userList); err == nil {
+		u := make(map[string]User, len(userList))
+		for _, user := range userList {
+			if user.Username == "" {
+				continue
+			}
+			user.ValidateAndSetDefaults()
+			u[user.Username] = user
+		}
+		return u, nil
+	}
+
+	var oldUserPass map[string]string
+	if err := json.Unmarshal(data, &oldUserPass); err != nil {
+		return nil, fmt.Errorf("failed to parse users data in either format: %w", err)
+	}
+
+	u := make(map[string]User, len(oldUserPass))
+	for username, password := range oldUserPass {
+		user := User{
+			Username: username,
+			Password: password,
+			Role:     RoleUser,
+		}
+		user.ValidateAndSetDefaults()
+		u[username] = user
+	}
+	return u, nil
+}
+
 // LoadUsers reads and parses users.json from the executable directory.
 func LoadUsers(rateInit RateLimiterInit) {
 	exeDir, err := paths.ExecutableDir()
@@ -43,47 +77,19 @@ func LoadUsers(rateInit RateLimiterInit) {
 		log.Fatalf("Failed to read users file: %v", err)
 	}
 
-	var userList []User
-	if err := json.Unmarshal(data, &userList); err == nil {
-		u := make(map[string]User)
-		for _, user := range userList {
-			if user.MaxSessions <= 0 {
-				user.MaxSessions = DefaultMaxSessionsPerUser
-			}
-			if user.SessionTTLSeconds <= 0 {
-				user.SessionTTLSeconds = DefaultSessionTTLSeconds
-			}
-			if user.MaxTotalMB < 0 {
-				user.MaxTotalMB = 0
-			}
-			u[user.Username] = user
-			if rateInit != nil && user.MaxSpeedKBPS > 0 {
-				rateInit(user.Username, user.MaxSpeedKBPS)
-			}
-		}
-		SetUsers(u)
-		log.Printf("✅ Loaded %d users with role-based access control", len(u))
-		return
-	}
-
-	var oldUserPass map[string]string
-	if err := json.Unmarshal(data, &oldUserPass); err != nil {
+	u, err := ParseUsersData(data)
+	if err != nil {
 		log.Fatalf("Failed to parse users file: %v", err)
 	}
 
-	u := make(map[string]User)
-	for username, password := range oldUserPass {
-		u[username] = User{
-			Username:          username,
-			Password:          password,
-			Role:              "user",
-			MaxSessions:       DefaultMaxSessionsPerUser,
-			SessionTTLSeconds: DefaultSessionTTLSeconds,
-			MaxTotalMB:        0,
+	for _, user := range u {
+		if rateInit != nil && user.MaxSpeedKBPS > 0 {
+			rateInit(user.Username, user.MaxSpeedKBPS)
 		}
 	}
+
 	SetUsers(u)
-	log.Printf("✅ Loaded %d users from legacy format (all set to 'user' role)", len(u))
+	log.Printf("✅ Loaded %d users with role-based access control", len(u))
 }
 
 // LoadServerConfig reads and parses server_config.json from the executable directory.
@@ -103,6 +109,7 @@ func LoadServerConfig() {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Fatalf("Failed to parse server config file: %v", err)
 	}
+	cfg.ValidateAndSetDefaults()
 	SetServerConfig(cfg)
 }
 
