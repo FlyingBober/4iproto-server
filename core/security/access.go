@@ -18,6 +18,7 @@
 package security
 
 import (
+	"path/filepath"
 	"strings"
 
 	"Abdal_4iProto_Server/core/config"
@@ -46,24 +47,33 @@ func IsDomainOrIPBlocked(username, target string) bool {
 }
 
 func matchesWildcard(str, pattern string) bool {
+	str = strings.ToLower(strings.TrimSpace(str))
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+
 	if str == pattern {
 		return true
 	}
 
-	if strings.Contains(pattern, "*") {
-		regexPattern := strings.ReplaceAll(pattern, ".", "\\.")
-		regexPattern = strings.ReplaceAll(regexPattern, "*", ".*")
+	// *.example.com matches example.com directly
+	if strings.HasPrefix(pattern, "*.") && str == pattern[2:] {
+		return true
+	}
 
-		if strings.HasPrefix(regexPattern, ".*") && strings.HasSuffix(regexPattern, ".*") {
-			innerPattern := regexPattern[2 : len(regexPattern)-2]
-			return strings.Contains(str, innerPattern)
-		} else if strings.HasPrefix(regexPattern, ".*") {
-			suffix := regexPattern[2:]
-			return strings.HasSuffix(str, suffix)
-		} else if strings.HasSuffix(regexPattern, ".*") {
-			prefix := regexPattern[:len(regexPattern)-2]
-			return strings.HasPrefix(str, prefix)
-		}
+	if matched, err := filepath.Match(pattern, str); err == nil && matched {
+		return true
+	}
+
+	// Substring wildcard: *part*
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") && len(pattern) > 2 {
+		return strings.Contains(str, pattern[1:len(pattern)-1])
+	}
+	// Prefix wildcard: *suffix
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(str, pattern[1:])
+	}
+	// Suffix wildcard: prefix*
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(str, pattern[:len(pattern)-1])
 	}
 
 	return false
