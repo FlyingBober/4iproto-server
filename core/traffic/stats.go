@@ -164,7 +164,44 @@ func (s *Store) UpdateRealTime(username, userIP string, sent, received int64, ma
 	return false
 }
 
-// SaveToFile persists traffic stats for a user to disk.
+// atomicWriteJSON marshals v and writes it atomically to path using a temp file.
+func atomicWriteJSON(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "traffic_*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		return fmt.Errorf("failed to chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("failed to atomic rename %s to %s: %w", tmpName, path, err)
+	}
+	return nil
+}
+
+// SaveToFile persists traffic stats for a user to disk atomically.
 func (s *Store) SaveToFile(username string) {
 	statsAny, ok := s.trafficMap.Load(username)
 	if !ok {
@@ -186,14 +223,18 @@ func (s *Store) SaveToFile(username string) {
 
 	filename := fmt.Sprintf("traffic_%s.json", username)
 	fullPath := filepath.Join(trafficDir, filename)
-	data, err := json.MarshalIndent(stats, "", "  ")
-	if err != nil {
-		log.Printf("⚠️ Failed to marshal traffic stats for %s: %v", username, err)
-		return
-	}
-	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+	if err := atomicWriteJSON(fullPath, stats); err != nil {
 		log.Printf("⚠️ Failed to write traffic file for %s: %v", username, err)
 	}
+}
+
+// SaveAllTraffic synchronously flushes all current in-memory traffic stats to disk.
+func (s *Store) SaveAllTraffic() {
+	s.trafficMap.Range(func(key, _ any) bool {
+		username := key.(string)
+		s.SaveToFile(username)
+		return true
+	})
 }
 
 // LoadExistingFiles loads all traffic_*.json files from users_traffic on startup.
@@ -268,16 +309,6 @@ func (s *Store) UpdateSessionFinalStats(username string, sent, received int64) {
 // StartAutoSave runs a background goroutine that periodically flushes all traffic stats.
 func (s *Store) StartAutoSave() {
 	go func() {
-		exeDir, err := paths.ExecutableDir()
-		if err != nil {
-			log.Printf("❌ Failed to get executable directory: %v", err)
-			return
-		}
-		trafficDir := filepath.Join(exeDir, config.UsersTrafficDir)
-		if err := os.MkdirAll(trafficDir, 0755); err != nil {
-			log.Printf("❌ Failed to create users_traffic directory: %v", err)
-		}
-
 		lastSavedBytes := make(map[string]int64)
 
 		for {
@@ -290,20 +321,10 @@ func (s *Store) StartAutoSave() {
 					return true
 				}
 
-				filename := fmt.Sprintf("traffic_%s.json", username)
-				fullPath := filepath.Join(trafficDir, filename)
-				data, err := json.MarshalIndent(stats, "", "  ")
-				if err != nil {
-					log.Printf("❌ Failed to marshal %s: %v", username, err)
-					return true
-				}
-				if err := os.WriteFile(fullPath, data, 0644); err != nil {
-					log.Printf("❌ Failed to write traffic file for %s: %v", username, err)
-					return true
-				}
+				s.SaveToFile(username)
 				lastSavedBytes[username] = stats.TotalBytes
-				log.Printf("✅ [AUTO] Saved traffic → %s | ↑%dB ↓%dB 📦 %dB",
-					filename, stats.TotalBytesSent, stats.TotalBytesReceived, stats.TotalBytes)
+				log.Printf("✅ [AUTO] Saved traffic → traffic_%s.json | ↑%dB ↓%dB 📦 %dB",
+					username, stats.TotalBytesSent, stats.TotalBytesReceived, stats.TotalBytes)
 				return true
 			})
 		}
