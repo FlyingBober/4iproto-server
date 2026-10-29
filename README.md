@@ -10,9 +10,15 @@ A high-performance SSH-based tunneling server designed for secure internet acces
 
 ## 📚 Documentation
 
-Full installation, configuration, features, clients, monitoring, and guides are available here:
+Comprehensive project documentation is available in the [`docs/`](docs/README.md) directory:
 
-- 📘 **[Official Documentation](https://ebrasha.github.io/abdal-4iproto-server/)**
+- 🚀 [**Installation & Setup Guide**](docs/installation.md) — System requirements, build from source, systemd daemon, SSH host keys.
+- ⚙️ [**Configuration Reference**](docs/configuration.md) — Specification of `server_config.json`, `users.json` (roles, quotas, speed caps, eviction), `blocked_ips.json`.
+- 🛠️ [**Operations & Monitoring**](docs/operations.md) — Service lifecycle, graceful shutdown, logging, traffic monitoring, BoltDB backup, troubleshooting.
+- 📱 [**Client Connection Guide**](docs/clients.md) — Client configuration for Linux, Windows, Android, and iOS.
+- 🏗️ [**Architecture & Internals**](docs/architecture.md) — SSH channel multiplexing (`direct-tcpip`, `direct-udpip`), DNSTT, Session Eviction, Token Bucket.
+- 💡 [**Lessons Learned & Incidents**](docs/LESSONS_LEARNED.md) — Operational insights, post-mortems, and engineering practices.
+- 🗄️ [**Author's Original Docs (Archive)**](website/docs/) — Local archive of the original Docusaurus documentation.
 
 ## 🚀 Features
 
